@@ -36,6 +36,7 @@ private struct HistoryPanelUX {
 class HistoryPanel: UIViewController, HomePanel {
     weak var homePanelDelegate: HomePanelDelegate? = nil
     var profile: Profile!
+    private var currentSyncedDevicesCount: Int? = 0
     private lazy var tableViewController: HistoryPanelSiteTableViewController = {
         return HistoryPanelSiteTableViewController()
     }()
@@ -52,6 +53,13 @@ class HistoryPanel: UIViewController, HomePanel {
         return button
     }()
 
+    func fetchSyncedDevicesCount() -> Success {
+        return chainDeferred(self.profile.getCachedClientsAndTabs()) { deferMaybe($0.count) }.bindQueue(dispatch_get_main_queue()) { result in
+            self.currentSyncedDevicesCount = result.successValue
+            return succeed()
+        }
+    }
+
     override func viewDidLoad() {
         super.viewDidLoad()
 
@@ -60,29 +68,37 @@ class HistoryPanel: UIViewController, HomePanel {
         tableViewController.historyPanel = self
 
         self.addChildViewController(tableViewController)
-        self.view.addSubview(tableViewController.view)
-        self.view.addSubview(syncedTabsButton)
-        self.view.addSubview(recentlyClosedTabsButton)
 
-        recentlyClosedTabsButton.snp_makeConstraints { make in
-            make.top.leading.trailing.equalTo(self.view)
-            make.height.equalTo(HistoryPanelUX.SyncedTabsCellHeight)
-            make.bottom.equalTo(syncedTabsButton.snp_top)
+        setUpHistoryPanelViews()
+        
+        self.tableViewController.didMoveToParentViewController(self)
+    }
+
+    func setUpHistoryPanelViews() -> Success {
+        return fetchSyncedDevicesCount().bindQueue(dispatch_get_main_queue()) { result in
+            self.view.addSubview(self.recentlyClosedTabsButton)
+            self.view.addSubview(self.tableViewController.view)
+            self.view.addSubview(self.syncedTabsButton)
+
+            self.updateNumberOfSyncedDevices(self.currentSyncedDevicesCount)
+
+            self.syncedTabsButton.snp_makeConstraints { make in
+                make.leading.trailing.equalTo(self.view)
+                make.top.equalTo(self.recentlyClosedTabsButton.snp_bottom)
+                make.height.equalTo(HistoryPanelUX.SyncedTabsCellHeight)
+                make.bottom.equalTo(self.tableViewController.view.snp_top)
+            }
+            self.recentlyClosedTabsButton.snp_makeConstraints { make in
+                make.top.leading.trailing.equalTo(self.view)
+                make.height.equalTo(HistoryPanelUX.SyncedTabsCellHeight)
+                make.bottom.equalTo(self.syncedTabsButton.snp_top)
+            }
+            self.tableViewController.view.snp_makeConstraints { make in
+                make.top.equalTo(self.syncedTabsButton.snp_bottom)
+                make.leading.trailing.bottom.equalTo(self.view)
+            }
+            return succeed()
         }
-
-        syncedTabsButton.snp_makeConstraints { make in
-            make.leading.trailing.equalTo(self.view)
-            make.top.equalTo(recentlyClosedTabsButton.snp_bottom)
-            make.height.equalTo(HistoryPanelUX.SyncedTabsCellHeight)
-            make.bottom.equalTo(tableViewController.view.snp_top)
-        }
-
-        tableViewController.view.snp_makeConstraints { make in
-            make.top.equalTo(syncedTabsButton.snp_bottom)
-            make.leading.trailing.bottom.equalTo(self.view)
-        }
-
-        tableViewController.didMoveToParentViewController(self)
     }
 
     override func viewWillAppear(animated: Bool) {
@@ -91,18 +107,15 @@ class HistoryPanel: UIViewController, HomePanel {
         recentlyClosedTabsButton.enabled = profile.recentlyClosedTabs.tabs.count > 0
     }
 
-    func updateNumberOfSyncedDevices() {
-        self.profile.getCachedClientsAndTabs().uponQueue(dispatch_get_main_queue()) { result in
-            guard let clientAndTabs = result.successValue?.filter({ $0.tabs.count > 0 }) where clientAndTabs.count > 0 else {
-                self.syncedTabsButton.descriptionLabel.hidden = true
-                self.syncedTabsButton.updateConstraints()
-                return
-            }
-
-            self.syncedTabsButton.descriptionLabel.text = String.localizedStringWithFormat(Strings.SyncedTabsTableViewCellDescription, clientAndTabs.count)
+    func updateNumberOfSyncedDevices(count: Int?) {
+        if let count = count where count > 0 {
+            self.syncedTabsButton.descriptionLabel.text = String.localizedStringWithFormat(Strings.SyncedTabsTableViewCellDescription, count)
             self.syncedTabsButton.descriptionLabel.hidden = false
+        } else {
+            self.syncedTabsButton.descriptionLabel.hidden = true
             self.syncedTabsButton.updateConstraints()
         }
+        self.syncedTabsButton.updateConstraints()
     }
 
     @objc private func syncedTabsCellWasTapped() {
@@ -196,8 +209,8 @@ class HistoryPanelSiteTableViewController: SiteTableViewController {
         } else if refreshControl?.refreshing == false {
             removeRefreshControl()
         }
-
-        historyPanel?.updateNumberOfSyncedDevices()
+        historyPanel?.fetchSyncedDevicesCount()
+        historyPanel?.updateNumberOfSyncedDevices(historyPanel?.currentSyncedDevicesCount)
     }
 
     /**
@@ -223,7 +236,8 @@ class HistoryPanelSiteTableViewController: SiteTableViewController {
                 self.endRefreshing()
             }
 
-            self.historyPanel?.updateNumberOfSyncedDevices()
+            self.historyPanel?.fetchSyncedDevicesCount()
+            self.historyPanel?.updateNumberOfSyncedDevices(self.historyPanel?.currentSyncedDevicesCount)
         }
     }
 
@@ -255,7 +269,8 @@ class HistoryPanelSiteTableViewController: SiteTableViewController {
     @objc func refresh() {
         self.refreshControl?.beginRefreshing()
         resyncHistory()
-        historyPanel?.updateNumberOfSyncedDevices()
+        historyPanel?.fetchSyncedDevicesCount()
+        historyPanel?.updateNumberOfSyncedDevices(historyPanel?.currentSyncedDevicesCount)
     }
 
     /**
